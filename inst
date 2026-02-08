@@ -1,3 +1,119 @@
+#!/bin/bash
+
+echo "======================================"
+echo "  FunHub V1 Executor - Installing"
+echo "======================================"
+echo ""
+
+# Check Node.js
+if ! command -v node &> /dev/null; then
+    echo "❌ Node.js not found. Installing..."
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+        sudo apt-get install -y nodejs
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        brew install node
+    fi
+fi
+
+# Create app directory
+cd ~
+rm -rf FunHub-V1
+mkdir -p FunHub-V1
+cd FunHub-V1
+
+echo "📦 Setting up Electron app..."
+
+# Create package.json
+cat > package.json << 'EOF'
+{
+  "name": "funhub-v1-executor",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^28.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.14.2"
+  }
+}
+EOF
+
+# Install dependencies
+echo "⬇️  Installing dependencies..."
+npm install --silent
+
+# Create main.js
+cat > main.js << 'EOF'
+const { app, BrowserWindow } = require('electron');
+const WebSocket = require('ws');
+
+let mainWindow;
+let wss;
+
+function createWindow() {
+    mainWindow = new BrowserWindow({
+        width: 1200,
+        height: 800,
+        backgroundColor: '#0a0e1a',
+        webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false
+        }
+    });
+
+    mainWindow.loadFile('index.html');
+    
+    // Start WebSocket server
+    wss = new WebSocket.Server({ port: 8080 });
+    let robloxConn = null;
+    
+    wss.on('connection', (ws, req) => {
+        const agent = req.headers['user-agent'] || '';
+        
+        if (agent === 'roblox-executor') {
+            console.log('✅ Roblox connected');
+            robloxConn = ws;
+            
+            mainWindow.webContents.executeJavaScript(`
+                document.querySelector('.status-dot').style.background = '#4ade80';
+                document.querySelector('.connection-status span').textContent = 'Connected';
+            `);
+            
+            ws.on('close', () => {
+                console.log('❌ Roblox disconnected');
+                robloxConn = null;
+                mainWindow.webContents.executeJavaScript(`
+                    document.querySelector('.status-dot').style.background = '#f87171';
+                    document.querySelector('.connection-status span').textContent = 'Disconnected';
+                `);
+            });
+        } else {
+            ws.send(JSON.stringify({ type: 'status', connected: robloxConn !== null }));
+            
+            ws.on('message', (data) => {
+                const msg = JSON.parse(data);
+                if (msg.type === 'execute' && robloxConn) {
+                    robloxConn.send(JSON.stringify({ type: 'execute', script: msg.script }));
+                }
+            });
+        }
+    });
+}
+
+app.whenReady().then(createWindow);
+
+app.on('window-all-closed', () => {
+    if (wss) wss.close();
+    app.quit();
+});
+EOF
+
+# Create index.html with your UI
+cat > index.html << 'HTMLEOF'
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -53,7 +169,7 @@
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background: #4ade80;
+            background: #f87171;
             animation: pulse 2s infinite;
         }
 
@@ -234,7 +350,7 @@
         <h1>FunHub V1 Executor</h1>
         <div class="connection-status">
             <div class="status-dot"></div>
-            <span>Connected</span>
+            <span>Disconnected</span>
         </div>
     </div>
 
@@ -301,9 +417,20 @@ print(player.Name)
     </div>
 
     <script>
-        // Basic interactivity
+        const WebSocket = require('ws');
+        let ws = new WebSocket('ws://localhost:8080');
+        
+        ws.on('open', () => console.log('Connected to backend'));
+        
+        ws.on('message', (data) => {
+            const msg = JSON.parse(data);
+            console.log('Message:', msg);
+        });
+        
         document.querySelector('.execute-btn').addEventListener('click', () => {
-            alert('Execute functionality would go here!\nThis is just the UI - no actual execution yet.');
+            const code = document.querySelector('textarea').value;
+            ws.send(JSON.stringify({ type: 'execute', script: code }));
+            console.log('Script sent!');
         });
 
         // Tab switching
@@ -328,3 +455,12 @@ print(player.Name)
     </script>
 </body>
 </html>
+HTMLEOF
+
+echo ""
+echo "✅ Installation Complete!"
+echo ""
+echo "To start FunHub V1:"
+echo "  cd ~/FunHub-V1"
+echo "  npm start"
+echo ""
